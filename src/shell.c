@@ -4,84 +4,122 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <fcntl.h>
 #include "lexer.h"
 
 // Function to display the shell prompt in the format: USER@MACHINE:PWD>
 void display_prompt() {
-    char *user = getenv("USER"); // Get current user
+    char *user = getenv("USER");
     char host[256];
-    gethostname(host, sizeof(host)); // Get machine hostname
-    char *pwd = getenv("PWD"); // Get current working directory
+    gethostname(host, sizeof(host));
+    char *pwd = getenv("PWD");
 
-    printf("%s@%s:%s> ", user, host, pwd); // Print formatted prompt
-    fflush(stdout); // Ensure the prompt is displayed immediately
+    printf("%s@%s:%s> ", user, host, pwd);
+    fflush(stdout);
 }
 
 // Function to handle internal commands like 'exit' and 'cd'
 int handle_internal_commands(tokenlist *tokens) {
-    if (tokens->size == 0) return 0; // Ignore empty input
+    if (tokens->size == 0) return 0;
 
-    // Handle 'exit' command
     if (strcmp(tokens->items[0], "exit") == 0) {
         printf("Exiting shell...\n");
         exit(0);
     }
 
-    // Handle 'cd' command
     if (strcmp(tokens->items[0], "cd") == 0) {
         if (tokens->size < 2) {
             fprintf(stderr, "cd: missing argument\n");
         } else {
             if (chdir(tokens->items[1]) != 0) {
-                perror("cd failed"); // Print error if directory change fails
+                perror("cd failed");
             }
         }
-        return 1; // Indicate that we handled an internal command
+        return 1;
     }
-
-    return 0; // Not an internal command
+    return 0;
 }
 
-// Function to execute a command using fork() and execvp()
+// Function to execute a command, handling input/output redirection
 void execute_command(tokenlist *tokens) {
-    if (handle_internal_commands(tokens)) return; // Check for internal commands
+    if (handle_internal_commands(tokens)) return;
 
-    if (tokens->size == 0) return; // Ignore empty input
+    if (tokens->size == 0) return;
 
-    pid_t pid = fork(); // Create a child process
+    int input_redirect = -1;
+    int output_redirect = -1;
+    char *input_file = NULL;
+    char *output_file = NULL;
 
+    // Scan for redirection operators and remove them from tokens
+    for (int i = 0; i < tokens->size; i++) {
+        if (strcmp(tokens->items[i], "<") == 0 && i + 1 < tokens->size) {
+            input_file = tokens->items[i + 1];
+            tokens->items[i] = NULL;  // Remove `<`
+            tokens->items[i + 1] = NULL;  // Remove file name
+        } else if (strcmp(tokens->items[i], ">") == 0 && i + 1 < tokens->size) {
+            output_file = tokens->items[i + 1];
+            tokens->items[i] = NULL;  // Remove `>`
+            tokens->items[i + 1] = NULL;  // Remove file name
+        }
+    }
+
+    pid_t pid = fork();
     if (pid == -1) {
-        perror("fork failed"); // Error handling
+        perror("fork failed");
         exit(1);
     } 
     else if (pid == 0) { // Child process
-        char *args[tokens->size + 1]; // Convert token list to argument array
-        for (int i = 0; i < tokens->size; i++) {
-            args[i] = tokens->items[i]; // Copy tokens
+        if (input_file) {
+            input_redirect = open(input_file, O_RDONLY);
+            if (input_redirect < 0) {
+                perror("Input redirection failed");
+                exit(1);
+            }
+            dup2(input_redirect, STDIN_FILENO);  // Redirect stdin to file
+            close(input_redirect);
         }
-        args[tokens->size] = NULL; // Null-terminate the argument list
 
-        // Execute the command using execvp() (execvp automatically searches in $PATH)
+        if (output_file) {
+            output_redirect = open(output_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            if (output_redirect < 0) {
+                perror("Output redirection failed");
+                exit(1);
+            }
+            dup2(output_redirect, STDOUT_FILENO);  // Redirect stdout to file
+            close(output_redirect);
+        }
+
+        // Prepare command arguments
+        char *args[tokens->size + 1];
+        int j = 0;
+        for (int i = 0; i < tokens->size; i++) {
+            if (tokens->items[i] != NULL) {
+                args[j++] = tokens->items[i];
+            }
+        }
+        args[j] = NULL; // Null-terminate argument list
+
         if (execvp(args[0], args) == -1) {
-            perror("execvp failed"); // Command execution failed
+            perror("execvp failed");
             exit(1);
         }
     } 
     else { // Parent process
-        wait(NULL); // Wait for child process to finish
+        wait(NULL); // Wait for child to finish
     }
 }
 
 int main() {
     while (1) {
-        display_prompt(); // Show the shell prompt
-        char *input = get_input(); // Get user input
-        tokenlist *tokens = get_tokens(input); // Tokenize the input
+        display_prompt();
+        char *input = get_input();
+        tokenlist *tokens = get_tokens(input);
 
-        execute_command(tokens); // Execute the command
+        execute_command(tokens);
 
-        free(input); // Free dynamically allocated memory
+        free(input);
         free_tokens(tokens);
     }
-    return 0; // Should never reach this point
+    return 0;
 }
