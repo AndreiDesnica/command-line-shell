@@ -1,0 +1,7 @@
+Makefile
+docs
+include
+ls
+output.txt
+shell
+src
