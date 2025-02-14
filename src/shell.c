@@ -2,12 +2,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include "lexer.h"
-
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include "lexer.h"
@@ -23,8 +17,35 @@ void display_prompt() {
     fflush(stdout); // Ensure the prompt is displayed immediately
 }
 
-// Function to execute a command using fork() and execv()
+// Function to handle internal commands like 'exit' and 'cd'
+int handle_internal_commands(tokenlist *tokens) {
+    if (tokens->size == 0) return 0; // Ignore empty input
+
+    // Handle 'exit' command
+    if (strcmp(tokens->items[0], "exit") == 0) {
+        printf("Exiting shell...\n");
+        exit(0);
+    }
+
+    // Handle 'cd' command
+    if (strcmp(tokens->items[0], "cd") == 0) {
+        if (tokens->size < 2) {
+            fprintf(stderr, "cd: missing argument\n");
+        } else {
+            if (chdir(tokens->items[1]) != 0) {
+                perror("cd failed"); // Print error if directory change fails
+            }
+        }
+        return 1; // Indicate that we handled an internal command
+    }
+
+    return 0; // Not an internal command
+}
+
+// Function to execute a command using fork() and execvp()
 void execute_command(tokenlist *tokens) {
+    if (handle_internal_commands(tokens)) return; // Check for internal commands
+
     if (tokens->size == 0) return; // Ignore empty input
 
     pid_t pid = fork(); // Create a child process
@@ -40,7 +61,7 @@ void execute_command(tokenlist *tokens) {
         }
         args[tokens->size] = NULL; // Null-terminate the argument list
 
-        // Execute the command using execv() (execvp automatically searches in $PATH)
+        // Execute the command using execvp() (execvp automatically searches in $PATH)
         if (execvp(args[0], args) == -1) {
             perror("execvp failed"); // Command execution failed
             exit(1);
