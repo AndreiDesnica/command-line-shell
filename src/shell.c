@@ -43,83 +43,104 @@ int handle_internal_commands(tokenlist *tokens) {
 // Function to execute a command, handling input/output redirection
 void execute_command(tokenlist *tokens) {
     if (handle_internal_commands(tokens)) return;
-
     if (tokens->size == 0) return;
 
-    int input_redirect = -1;
-    int output_redirect = -1;
-    char *input_file = NULL;
-    char *output_file = NULL;
+    int pipe_positions[10]; // Store positions of `|`
+    int pipe_count = 0;
     char *args[tokens->size + 1];
     int arg_index = 0;
 
-    // Scan for redirection operators and remove them from tokens
+    // Identify pipe positions
     for (int i = 0; i < tokens->size; i++) {
-        if (tokens->items[i] == NULL) continue; // Skip NULL tokens
+        if (tokens->items[i] != NULL && strcmp(tokens->items[i], "|") == 0) {
+            pipe_positions[pipe_count++] = i;
+            tokens->items[i] = NULL; // Break commands at `|`
+        }
+    }
 
-        // Ensure token[i] is not NULL before comparing
-        if (tokens->items[i] != NULL && strcmp(tokens->items[i], "<") == 0 && i + 1 < tokens->size) {
-            if (tokens->items[i + 1] != NULL) {
-                input_file = tokens->items[i + 1]; // Store input file name
-                tokens->items[i] = NULL;  // Remove `<`
-                tokens->items[i + 1] = NULL;  // Remove file name
+    // If no pipes exist, execute normally
+    if (pipe_count == 0) {
+        pid_t pid = fork();
+        if (pid == -1) {
+            perror("fork failed");
+            exit(1);
+        } else if (pid == 0) {
+            // Convert tokens to argument list
+            for (int i = 0; i < tokens->size; i++) {
+                if (tokens->items[i] != NULL) {
+                    args[arg_index++] = tokens->items[i];
+                }
             }
-            i++; // Skip the next token (file name)
-        }
-        else if (tokens->items[i] != NULL && strcmp(tokens->items[i], ">") == 0 && i + 1 < tokens->size) {
-            if (tokens->items[i + 1] != NULL) {
-                output_file = tokens->items[i + 1]; // Store output file name
-                tokens->items[i] = NULL;  // Remove `>`
-                tokens->items[i + 1] = NULL;  // Remove file name
-            }
-            i++; // Skip the next token (file name)
-        }
-        else {
-            args[arg_index++] = tokens->items[i]; // Keep valid commands
-        }
-    }
+            args[arg_index] = NULL;
 
-    args[arg_index] = NULL; // Null-terminate the argument list
-
-    if (arg_index == 0) {
-        printf("Error: No command to execute\n");
-        return;
-    }
-
-    pid_t pid = fork();
-    if (pid == -1) {
-        perror("fork failed");
-        exit(1);
-    }
-    else if (pid == 0) { // Child process
-        if (input_file) {
-            input_redirect = open(input_file, O_RDONLY);
-            if (input_redirect < 0) {
-                perror("Input redirection failed");
+            if (execvp(args[0], args) == -1) {
+                perror("execvp failed");
                 exit(1);
             }
-            dup2(input_redirect, STDIN_FILENO);  // Redirect stdin to file
-            close(input_redirect);
+        } else {
+            wait(NULL);
+            return;
         }
+    }
 
-        if (output_file) {
-            output_redirect = open(output_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-            if (output_redirect < 0) {
-                perror("Output redirection failed");
-                exit(1);
-            }
-            dup2(output_redirect, STDOUT_FILENO);  // Redirect stdout to file
-            close(output_redirect);
-        }
+    // Piping logic
+    int pipes[pipe_count][2];
 
-        // Execute the command
-        if (execvp(args[0], args) == -1) {
-            perror("execvp failed");
+    for (int i = 0; i < pipe_count; i++) {
+        if (pipe(pipes[i]) == -1) {
+            perror("pipe failed");
             exit(1);
         }
     }
-    else { // Parent process
-        wait(NULL); // Wait for child process to finish
+
+    int start = 0;
+    for (int i = 0; i <= pipe_count; i++) {
+        pid_t pid = fork();
+
+        if (pid == -1) {
+            perror("fork failed");
+            exit(1);
+        } else if (pid == 0) { // Child process
+            // If not first command, set input from previous pipe
+            if (i > 0) {
+                dup2(pipes[i - 1][0], STDIN_FILENO);
+            }
+            // If not last command, set output to next pipe
+            if (i < pipe_count) {
+                dup2(pipes[i][1], STDOUT_FILENO);
+            }
+
+            // Close all pipe ends in child
+            for (int j = 0; j < pipe_count; j++) {
+                close(pipes[j][0]);
+                close(pipes[j][1]);
+            }
+
+            // Extract arguments for this command
+            int cmd_index = 0;
+            for (int j = start; j < (i < pipe_count ? pipe_positions[i] : tokens->size); j++) {
+                args[cmd_index++] = tokens->items[j];
+            }
+            args[cmd_index] = NULL;
+
+            if (execvp(args[0], args) == -1) {
+                perror("execvp failed");
+                exit(1);
+            }
+        }
+
+        start = pipe_positions[i] + 1;
+    }
+
+    // Close all pipe ends in parent
+    for (int i = 0; i < pipe_count; i++) {
+        close(pipes[i][0]);
+        close(pipes[i][1]);
+    }
+
+    // Wait for all child processes
+    for (int i = 0; i <= pipe_count; i++) {
+        wait(NULL);
     }
 }
 
