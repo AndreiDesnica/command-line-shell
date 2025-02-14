@@ -50,25 +50,47 @@ void execute_command(tokenlist *tokens) {
     int output_redirect = -1;
     char *input_file = NULL;
     char *output_file = NULL;
+    char *args[tokens->size + 1];
+    int arg_index = 0;
 
     // Scan for redirection operators and remove them from tokens
     for (int i = 0; i < tokens->size; i++) {
-        if (strcmp(tokens->items[i], "<") == 0 && i + 1 < tokens->size) {
-            input_file = tokens->items[i + 1];
-            tokens->items[i] = NULL;  // Remove `<`
-            tokens->items[i + 1] = NULL;  // Remove file name
-        } else if (strcmp(tokens->items[i], ">") == 0 && i + 1 < tokens->size) {
-            output_file = tokens->items[i + 1];
-            tokens->items[i] = NULL;  // Remove `>`
-            tokens->items[i + 1] = NULL;  // Remove file name
+        if (tokens->items[i] == NULL) continue; // Skip NULL tokens
+
+        // Ensure token[i] is not NULL before comparing
+        if (tokens->items[i] != NULL && strcmp(tokens->items[i], "<") == 0 && i + 1 < tokens->size) {
+            if (tokens->items[i + 1] != NULL) {
+                input_file = tokens->items[i + 1]; // Store input file name
+                tokens->items[i] = NULL;  // Remove `<`
+                tokens->items[i + 1] = NULL;  // Remove file name
+            }
+            i++; // Skip the next token (file name)
         }
+        else if (tokens->items[i] != NULL && strcmp(tokens->items[i], ">") == 0 && i + 1 < tokens->size) {
+            if (tokens->items[i + 1] != NULL) {
+                output_file = tokens->items[i + 1]; // Store output file name
+                tokens->items[i] = NULL;  // Remove `>`
+                tokens->items[i + 1] = NULL;  // Remove file name
+            }
+            i++; // Skip the next token (file name)
+        }
+        else {
+            args[arg_index++] = tokens->items[i]; // Keep valid commands
+        }
+    }
+
+    args[arg_index] = NULL; // Null-terminate the argument list
+
+    if (arg_index == 0) {
+        printf("Error: No command to execute\n");
+        return;
     }
 
     pid_t pid = fork();
     if (pid == -1) {
         perror("fork failed");
         exit(1);
-    } 
+    }
     else if (pid == 0) { // Child process
         if (input_file) {
             input_redirect = open(input_file, O_RDONLY);
@@ -90,23 +112,14 @@ void execute_command(tokenlist *tokens) {
             close(output_redirect);
         }
 
-        // Prepare command arguments
-        char *args[tokens->size + 1];
-        int j = 0;
-        for (int i = 0; i < tokens->size; i++) {
-            if (tokens->items[i] != NULL) {
-                args[j++] = tokens->items[i];
-            }
-        }
-        args[j] = NULL; // Null-terminate argument list
-
+        // Execute the command
         if (execvp(args[0], args) == -1) {
             perror("execvp failed");
             exit(1);
         }
-    } 
+    }
     else { // Parent process
-        wait(NULL); // Wait for child to finish
+        wait(NULL); // Wait for child process to finish
     }
 }
 
